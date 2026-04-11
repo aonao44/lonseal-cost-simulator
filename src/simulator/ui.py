@@ -141,7 +141,11 @@ def _render_product_info(product_df: pd.DataFrame) -> None:
     price = _parse_float(str(latest.get("改定後の価格", "")))
     cols[2].metric("現行価格", f"{price:.2f} 円/m" if price else "—")
     cols[3].metric("最終改定日", str(latest.get("改定時期", "")))
-    cols[4].metric("製品重量", f"{PRODUCT_WEIGHT_KG_PER_M} kg/m")
+    cols[4].markdown(
+        f"<p style='font-size:14px; margin-bottom:0;'>製品重量</p>"
+        f"<p style='font-size:24px; font-weight:bold; color:#e74c3c; margin-top:0;'>{PRODUCT_WEIGHT_KG_PER_M} kg/m</p>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_cost_table(
