@@ -149,6 +149,7 @@ def _render_cost_table(
     """原価内訳テーブル（改定日ごとの時系列）。"""
     st.markdown("---")
     st.subheader("原価内訳（時系列比較）")
+    st.info("この表にはサンプルデータ（実データ）・ダミーデータ（仮置き値）・両者を掛け合わせた値が混在しています。凡例は下記を参照してください。")
 
     dates = product_df["改定時期"].tolist()
     purchase_prices = [
@@ -303,6 +304,7 @@ def _render_revision_history(product_df: pd.DataFrame) -> None:
     """改定履歴テーブル。"""
     st.markdown("---")
     st.subheader("改定履歴")
+    st.success("この表はすべてサンプルデータ（実データ）です。")
 
     history = product_df[["改定時期", "元価格", "改定後の価格", "改定理由"]].copy()
     history.columns = ["改定日", "改定前（円/m）", "改定後（円/m）", "改定理由"]
@@ -430,6 +432,7 @@ def _render_proposal_section(
     """提案文作成セクション。"""
     st.markdown("---")
     st.subheader("提案文作成")
+    st.info("提案文にはサンプルデータ（実データ）・ダミーデータ（仮置き値）・両者を掛け合わせた値が混在しています。")
 
     if st.button("提案文を作成", type="primary", use_container_width=True):
         with st.spinner("提案文を生成中..."):
