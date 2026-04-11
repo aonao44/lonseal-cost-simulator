@@ -248,20 +248,31 @@ def _render_cost_table(
 
     dummy_rows = {"② 燃動力費 小計", "③ 労務費", "④ その他（梱包費）", "⑤ 運賃"}
     mixed_rows = {"① 材料費 小計", "推定原価", "製造原価率"}
-    comp_detail_rows = {idx for idx in table_df.index if idx.startswith("  成分")}
-    fuel_detail_rows = {idx for idx in table_df.index if idx.startswith("  燃動力")}
 
-    def _style_cells(row: pd.Series) -> list[str]:
-        name = row.name
-        if name in dummy_rows or name in fuel_detail_rows:
-            return ["color: #e74c3c"] * len(row)
-        if name in mixed_rows or name in comp_detail_rows:
-            return ["background-color: #fff3cd"] * len(row)
-        return [""] * len(row)
+    def _row_style(name: str) -> str:
+        if name in dummy_rows or name.startswith("  燃動力"):
+            return "color: #e74c3c; font-weight: bold;"
+        if name in mixed_rows or name.startswith("  成分"):
+            return "background-color: #fff3cd;"
+        return ""
 
     st.caption("🔴 赤文字 = ダミーデータ（仮置き値）　🟡 黄色背景 = サンプル×ダミーの掛け合わせ")
-    styled = table_df.style.apply(_style_cells, axis=1)
-    st.dataframe(styled, use_container_width=True)
+
+    html = '<table style="width:100%; border-collapse:collapse; font-size:14px;">'
+    html += "<thead><tr><th style='text-align:left; padding:6px; border-bottom:2px solid #ccc;'>費目</th>"
+    for col in table_df.columns:
+        html += f"<th style='text-align:right; padding:6px; border-bottom:2px solid #ccc;'>{col}</th>"
+    html += "</tr></thead><tbody>"
+    for idx, row in table_df.iterrows():
+        style = _row_style(str(idx))
+        html += f"<tr style='{style}'>"
+        html += f"<td style='padding:6px; border-bottom:1px solid #eee;'>{idx}</td>"
+        for val in row:
+            html += f"<td style='text-align:right; padding:6px; border-bottom:1px solid #eee;'>{val}</td>"
+        html += "</tr>"
+    html += "</tbody></table>"
+
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def _render_chart(
