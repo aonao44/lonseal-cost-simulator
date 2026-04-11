@@ -245,7 +245,23 @@ def _render_cost_table(
     rows_data.append(rate_row)
 
     table_df = pd.DataFrame(rows_data).set_index("費目")
-    st.dataframe(table_df, use_container_width=True)
+
+    dummy_rows = {"② 燃動力費 小計", "③ 労務費", "④ その他（梱包費）", "⑤ 運賃"}
+    mixed_rows = {"① 材料費 小計", "推定原価", "製造原価率"}
+    comp_detail_rows = {idx for idx in table_df.index if idx.startswith("  成分")}
+    fuel_detail_rows = {idx for idx in table_df.index if idx.startswith("  燃動力")}
+
+    def _style_cells(row: pd.Series) -> list[str]:
+        name = row.name
+        if name in dummy_rows or name in fuel_detail_rows:
+            return ["color: #e74c3c"] * len(row)
+        if name in mixed_rows or name in comp_detail_rows:
+            return ["background-color: #fff3cd"] * len(row)
+        return [""] * len(row)
+
+    st.caption("🔴 赤文字 = ダミーデータ（仮置き値）　🟡 黄色背景 = サンプル×ダミーの掛け合わせ")
+    styled = table_df.style.apply(_style_cells, axis=1)
+    st.dataframe(styled, use_container_width=True)
 
 
 def _render_chart(
