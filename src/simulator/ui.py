@@ -133,7 +133,7 @@ def _render_product_info(product_df: pd.DataFrame) -> None:
     """品目基本情報セクション。"""
     st.markdown("---")
     st.subheader("品目情報")
-    st.caption("選択した品目の基本情報です。品質仕様書・単価改定履歴から抽出しています。")
+    st.caption("選択した品目の基本情報です。品質仕様書・単価改定履歴から抽出しています。※製品重量はダミー値です。")
     latest = product_df.iloc[-1]
     cols = st.columns(5)
     cols[0].metric("品名", str(latest.get("品名", "")))
