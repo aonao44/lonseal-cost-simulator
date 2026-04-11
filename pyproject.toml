@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drawing-similarity-poc"
+version = "0.1.0"
+description = "PoC for multimodal drawing similarity search with Gemini Embedding 2 and ChromaDB"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "chromadb>=1.0.0",
+  "google-genai>=1.33.0",
+  "pandas>=2.0.0",
+  "pillow>=10.4.0",
+  "pymupdf>=1.25.0",
+  "python-dotenv>=1.0.1",
+  "streamlit>=1.44.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
