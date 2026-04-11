@@ -253,10 +253,10 @@ def _render_cost_table(
         if name in dummy_rows or name.startswith("  燃動力"):
             return "color: #e74c3c; font-weight: bold;"
         if name in mixed_rows or name.startswith("  成分"):
-            return "background-color: #fff3cd;"
+            return "color: #f0ad4e; font-weight: bold;"
         return ""
 
-    st.caption("🔴 赤文字 = ダミーデータ（仮置き値）　🟡 黄色背景 = サンプル×ダミーの掛け合わせ")
+    st.caption("🔴 赤文字 = ダミーデータ（仮置き値）　🟠 オレンジ文字 = サンプル×ダミーの掛け合わせ")
 
     html = '<table style="width:100%; border-collapse:collapse; font-size:14px;">'
     html += "<thead><tr><th style='text-align:left; padding:6px; border-bottom:2px solid #ccc;'>費目</th>"
