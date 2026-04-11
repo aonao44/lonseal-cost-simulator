@@ -133,6 +133,7 @@ def _render_product_info(product_df: pd.DataFrame) -> None:
     """品目基本情報セクション。"""
     st.markdown("---")
     st.subheader("品目情報")
+    st.caption("選択した品目の基本情報です。品質仕様書・単価改定履歴から抽出しています。")
     latest = product_df.iloc[-1]
     cols = st.columns(5)
     cols[0].metric("品名", str(latest.get("品名", "")))
@@ -149,6 +150,7 @@ def _render_cost_table(
     """原価内訳テーブル（改定日ごとの時系列）。"""
     st.markdown("---")
     st.subheader("原価内訳（時系列比較）")
+    st.caption("成分・燃動力・労務費・運賃から推定原価を積み上げ計算し、改定日ごとに比較した表です。当社購入価格との差から仕入先の利益率を推定できます。")
     st.info("この表にはサンプルデータ（実データ）・ダミーデータ（仮置き値）・両者を掛け合わせた値が混在しています。凡例は下記を参照してください。")
 
     dates = product_df["改定時期"].tolist()
@@ -282,6 +284,7 @@ def _render_chart(
     """推定原価 vs 当社購入価格の折れ線チャート。"""
     st.markdown("---")
     st.subheader("推定原価 vs 当社購入価格")
+    st.caption("推定原価と当社購入価格の推移を可視化したチャートです。乖離が大きいほど交渉余地があります。")
 
     dates = pd.to_datetime(product_df["改定時期"], format="%Y/%m/%d", errors="coerce")
     purchase_prices = [
@@ -304,6 +307,7 @@ def _render_revision_history(product_df: pd.DataFrame) -> None:
     """改定履歴テーブル。"""
     st.markdown("---")
     st.subheader("改定履歴")
+    st.caption("過去の価格改定の記録です。改定日・改定前後の価格・仕入先が申告した改定理由を一覧で確認できます。")
     st.success("この表はすべてサンプルデータ（実データ）です。")
 
     history = product_df[["改定時期", "元価格", "改定後の価格", "改定理由"]].copy()
@@ -432,6 +436,7 @@ def _render_proposal_section(
     """提案文作成セクション。"""
     st.markdown("---")
     st.subheader("提案文作成")
+    st.caption("シミュレーション結果に基づき、仕入先への価格交渉用の提案文を自動生成します。製造原価率に応じた交渉方針の案を含みます。")
     st.info("提案文にはサンプルデータ（実データ）・ダミーデータ（仮置き値）・両者を掛け合わせた値が混在しています。")
 
     if st.button("提案文を作成", type="primary", use_container_width=True):
