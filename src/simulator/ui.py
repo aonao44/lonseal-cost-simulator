@@ -250,15 +250,45 @@ def _render_cost_table(
 
     table_df = pd.DataFrame(rows_data).set_index("費目")
 
-    subtotal_rows = {"① 材料費 小計", "② 燃動力費 小計", "推定原価"}
-    summary_rows = {"当社購入価格", "製造原価率"}
+    # 成分ごとに一次情報URLが存在するか判定
+    component_has_url: dict[int, bool] = {}
+    for i in range(1, 5):
+        has_url = False
+        for _, row in product_df.iterrows():
+            url = str(row.get(f"［成分{i}］市況情報", "")).strip()
+            if url.startswith("http"):
+                has_url = True
+                break
+        component_has_url[i] = has_url
+
+    # 純ダミー: 梱包費のみ（一次情報なし）
+    dummy_rows = {"④ その他（梱包費）"}
+    # 掛け合わせ/集計行
+    mixed_rows = {"① 材料費 小計", "② 燃動力費 小計", "推定原価", "製造原価率"}
+    # 太字にする行
+    bold_rows = {"① 材料費 小計", "② 燃動力費 小計", "推定原価", "当社購入価格", "製造原価率"}
 
     def _row_style(name: str) -> str:
-        if name in subtotal_rows:
-            return "font-weight: bold;"
-        if name in summary_rows:
-            return "font-weight: bold; border-top: 2px solid #666;"
-        return ""
+        styles: list[str] = []
+        if name in dummy_rows:
+            styles.append("color: #e74c3c")
+        elif name in mixed_rows:
+            styles.append("color: #f0ad4e")
+        elif name.startswith("  成分"):
+            # 個別成分行: URLがなければオレンジ、あれば白（デフォルト）
+            try:
+                idx = int(name.strip().split(":")[0].replace("成分", ""))
+                if not component_has_url.get(idx, False):
+                    styles.append("color: #f0ad4e")
+            except ValueError:
+                pass
+        if name in bold_rows:
+            styles.append("font-weight: bold")
+        if name == "当社購入価格":
+            styles.append("border-top: 2px solid #666")
+        return "; ".join(styles)
+
+    st.caption("⚪ 白文字 = 一次情報あり　🟠 オレンジ文字 = 掛け合わせ/集計値　🔴 赤文字 = 純ダミー（梱包費）")
 
     html = '<table style="width:100%; border-collapse:collapse; font-size:14px;">'
     html += "<thead><tr><th style='text-align:left; padding:6px; border-bottom:2px solid #ccc;'>費目</th>"
