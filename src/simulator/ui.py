@@ -48,6 +48,7 @@ def run_app() -> None:
     _render_cost_table(product_df, breakdowns)
     _render_chart(product_df, breakdowns)
     _render_revision_history(product_df)
+    _render_source_links(product_df)
     _render_proposal_section(product_df, breakdowns)
 
 
@@ -133,7 +134,7 @@ def _render_product_info(product_df: pd.DataFrame) -> None:
     """品目基本情報セクション。"""
     st.markdown("---")
     st.subheader("品目情報")
-    st.caption("選択した品目の基本情報です。品質仕様書・単価改定履歴から抽出しています。※製品重量はダミー値です。")
+    st.caption("選択した品目の基本情報です。品質仕様書・単価改定履歴から抽出しています。")
     latest = product_df.iloc[-1]
     cols = st.columns(5)
     cols[0].metric("品名", str(latest.get("品名", "")))
@@ -141,11 +142,7 @@ def _render_product_info(product_df: pd.DataFrame) -> None:
     price = _parse_float(str(latest.get("改定後の価格", "")))
     cols[2].metric("現行価格", f"{price:.2f} 円/m" if price else "—")
     cols[3].metric("最終改定日", str(latest.get("改定時期", "")))
-    cols[4].markdown(
-        f"<p style='font-size:14px; margin-bottom:0;'>製品重量</p>"
-        f"<p style='font-size:24px; font-weight:bold; color:#e74c3c; margin-top:0;'>{PRODUCT_WEIGHT_KG_PER_M} kg/m</p>",
-        unsafe_allow_html=True,
-    )
+    cols[4].metric("製品重量", f"{PRODUCT_WEIGHT_KG_PER_M} kg/m")
 
 
 def _render_cost_table(
@@ -155,7 +152,7 @@ def _render_cost_table(
     st.markdown("---")
     st.subheader("原価内訳（時系列比較）（円/m）")
     st.caption("成分・燃動力・労務費・運賃から推定原価を積み上げ計算し、改定日ごとに比較した表です。当社購入価格との差から仕入先の利益率を推定できます。")
-    st.info("この表にはサンプルデータ（実データ）・ダミーデータ（仮置き値）・両者を掛け合わせた値が混在しています。凡例は下記を参照してください。")
+    st.info("市況単価は日銀企業物価指数（CGPI）、労務費は厚労省最低賃金、運賃は国交省標準運賃に基づく推計値です。詳細は docs/market-data-sources.md を参照。")
 
     dates = product_df["改定時期"].tolist()
     purchase_prices = [
@@ -253,17 +250,15 @@ def _render_cost_table(
 
     table_df = pd.DataFrame(rows_data).set_index("費目")
 
-    dummy_rows = {"② 燃動力費 小計", "③ 労務費", "④ その他（梱包費）", "⑤ 運賃"}
-    mixed_rows = {"① 材料費 小計", "推定原価", "製造原価率"}
+    subtotal_rows = {"① 材料費 小計", "② 燃動力費 小計", "推定原価"}
+    summary_rows = {"当社購入価格", "製造原価率"}
 
     def _row_style(name: str) -> str:
-        if name in dummy_rows or name.startswith("  燃動力"):
-            return "color: #e74c3c; font-weight: bold;"
-        if name in mixed_rows or name.startswith("  成分"):
-            return "color: #f0ad4e; font-weight: bold;"
+        if name in subtotal_rows:
+            return "font-weight: bold;"
+        if name in summary_rows:
+            return "font-weight: bold; border-top: 2px solid #666;"
         return ""
-
-    st.caption("🔴 赤文字 = ダミーデータ（仮置き値）　🟠 オレンジ文字 = サンプル×ダミーの掛け合わせ")
 
     html = '<table style="width:100%; border-collapse:collapse; font-size:14px;">'
     html += "<thead><tr><th style='text-align:left; padding:6px; border-bottom:2px solid #ccc;'>費目</th>"
@@ -312,7 +307,7 @@ def _render_revision_history(product_df: pd.DataFrame) -> None:
     st.markdown("---")
     st.subheader("改定履歴")
     st.caption("過去の価格改定の記録です。改定日・改定前後の価格・仕入先が申告した改定理由を一覧で確認できます。")
-    st.success("この表はすべてサンプルデータ（実データ）です。")
+    st.caption("品質仕様書・単価改定履歴・価格交渉記録から抽出したデータです。")
 
     history = product_df[["改定時期", "元価格", "改定後の価格", "改定理由"]].copy()
     history.columns = ["改定日", "改定前（円/m）", "改定後（円/m）", "改定理由"]
@@ -434,6 +429,44 @@ def _build_proposal_text(
     return "\n".join(lines)
 
 
+def _render_source_links(product_df: pd.DataFrame) -> None:
+    """一次ソースURL参照セクション。unified.csv の市況情報列からURLを抽出して表示。"""
+    st.markdown("---")
+    st.subheader("一次ソース参照")
+    st.caption("各費目の市況データの出典URLです。クリックすると最新の市況データを確認できます。")
+
+    latest = product_df.iloc[-1]
+
+    links: list[tuple[str, str]] = []
+
+    # 成分ごとの市況情報URL
+    for i in range(1, 5):
+        comp_name = str(latest.get(f"成分{i}", "")).strip()
+        url = str(latest.get(f"［成分{i}］市況情報", "")).strip()
+        if comp_name and url and url.startswith("http"):
+            links.append((f"成分{i}（{comp_name}）市況単価", url))
+
+    # 燃動力ごとの市況情報URL
+    for i in range(1, 5):
+        fuel_name = str(latest.get(f"燃動力{i}", "")).strip()
+        url = str(latest.get(f"［燃動力{i}］市況情報", "")).strip()
+        if fuel_name and url and url.startswith("http"):
+            links.append((f"燃動力{i}（{fuel_name}）単価", url))
+
+    # 労務費
+    url = str(latest.get("［労務費］市況情報", "")).strip()
+    if url and url.startswith("http"):
+        links.append(("労務費", url))
+
+    if not links:
+        st.info("この品目の市況情報URLはデータに登録されていません。")
+        return
+
+    cols = st.columns(min(len(links), 3))
+    for idx, (label, url) in enumerate(links):
+        cols[idx % 3].markdown(f"**{label}**  \n[{url}]({url})")
+
+
 def _render_proposal_section(
     product_df: pd.DataFrame, breakdowns: list[CostBreakdown]
 ) -> None:
@@ -441,7 +474,7 @@ def _render_proposal_section(
     st.markdown("---")
     st.subheader("提案文作成")
     st.caption("シミュレーション結果に基づき、仕入先への価格交渉用の提案文を自動生成します。製造原価率に応じた交渉方針の案を含みます。")
-    st.info("提案文にはサンプルデータ（実データ）・ダミーデータ（仮置き値）・両者を掛け合わせた値が混在しています。")
+    st.info("提案文は日銀CGPI・厚労省最低賃金・国交省標準運賃ベースのシミュレーション結果に基づきます。")
 
     if st.button("提案文を作成", type="primary", use_container_width=True):
         with st.spinner("提案文を生成中..."):
