@@ -288,7 +288,8 @@ def _render_cost_table(
             styles.append("border-top: 2px solid #666")
         return "; ".join(styles)
 
-    st.caption("⚪ 白文字 = 一次情報あり　🟠 オレンジ文字 = 掛け合わせ/集計値　🔴 赤文字 = 純ダミー（梱包費）")
+    st.caption("⚪ 白文字 = 一次情報あり（成分別URL）　🟠 オレンジ文字 = 掛け合わせ/集計値　🔴 赤文字 = 梱包費")
+    st.caption("※ 製品重量 0.08 kg/m・生産時間 4 h/m・労務/材料/燃動力係数・梱包ロット等は、クライアント提示の『やりたい事のイメージメモ（WK-680RIP 基準）』の係数に則った数字を全品目共通で使用しています。")
 
     html = '<table style="width:100%; border-collapse:collapse; font-size:14px;">'
     html += "<thead><tr><th style='text-align:left; padding:6px; border-bottom:2px solid #ccc;'>費目</th>"
