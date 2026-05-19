@@ -6,18 +6,15 @@ import streamlit as st
 
 from simulator.calc import (
     CostBreakdown,
+    ItemCoeffs,
     calc_total_cost,
 )
-from simulator.config import (
-    FUEL_COEFF,
-    FUEL_USAGE_ELEC_KWH_PER_M,
-    FUEL_USAGE_LNG_L_PER_M,
-    LOT_SIZE_M,
-    MATERIAL_COEFF,
-    PACKING_UNIT_PRICE,
-    PRODUCT_WEIGHT_KG_PER_M,
+from simulator.data import (
+    get_product_data,
+    get_product_names,
+    load_item_coeffs,
+    load_market_prices,
 )
-from simulator.data import get_product_data, get_product_names
 
 
 def run_app() -> None:
@@ -43,18 +40,21 @@ def run_app() -> None:
         st.warning("この品目のデータがありません。")
         return
 
-    _render_product_info(product_df)
-    breakdowns = _compute_breakdowns(product_df)
-    _render_cost_table(product_df, breakdowns)
-    _render_chart(product_df, breakdowns)
-    _render_revision_history(product_df)
+    doc_no = str(product_df.iloc[-1].get("文書番号", "")).strip()
+    coeffs = load_item_coeffs(doc_no)
+
+    _render_product_info(product_df, coeffs)
+    breakdowns = _compute_breakdowns(product_df, coeffs)
+    _render_cost_table(product_df, breakdowns, coeffs)
+    _render_chart(product_df, breakdowns, coeffs)
+    _render_revision_history(product_df, coeffs)
     _render_source_links(product_df)
-    _render_proposal_section(product_df, breakdowns)
+    _render_proposal_section(product_df, breakdowns, coeffs)
 
 
 def _parse_ratio(value: str) -> float:
     """'78%' や '65%' のような文字列を 0.78 に変換。範囲表記は中間値。"""
-    value = value.strip().replace("%", "").replace("％", "")
+    value = value.strip().replace("%", "").replace("％", "").lstrip("約")
     if not value:
         return 0.0
     if "-" in value and not value.startswith("-"):
@@ -82,55 +82,65 @@ def _parse_float(value: str) -> float:
 
 
 def _extract_components(row: pd.Series) -> list[dict]:
-    """1行から成分リスト（名前・含有量・市況単価）を抽出。"""
+    """1行から成分リスト（名前・含有量・市況単価・index）を抽出。"""
     components = []
     for i in range(1, 5):
         name = str(row.get(f"成分{i}", "")).strip()
         ratio = _parse_ratio(str(row.get(f"成分{i}_含有量", "")))
         price = _parse_float(str(row.get(f"［成分{i}］市況単価", "")))
         if name and ratio > 0 and price > 0:
-            components.append({"name": name, "ratio": ratio, "market_price": price})
+            components.append(
+                {"name": name, "ratio": ratio, "market_price": price, "index": i}
+            )
     return components
 
 
-def _extract_fuels(row: pd.Series) -> list[dict]:
-    """1行から燃動力リストを抽出。"""
+def _extract_fuels(row: pd.Series, coeffs: ItemCoeffs) -> list[dict]:
+    """1行から燃動力リストを抽出。係数・使用量は coeffs から。"""
     fuels = []
-    fuel_usages = {
-        1: FUEL_USAGE_LNG_L_PER_M,
-        2: FUEL_USAGE_ELEC_KWH_PER_M,
+    fuel_meta = {
+        1: ("LNG", coeffs.lng_usage, coeffs.lng_coeff),
+        2: ("電力", coeffs.elec_usage, coeffs.elec_coeff),
     }
-    for i in range(1, 3):
+    for i in (1, 2):
         name = str(row.get(f"燃動力{i}", "")).strip()
         price = _parse_float(str(row.get(f"［燃動力{i}］単価", "")))
-        usage = fuel_usages[i]
+        _, usage, c = fuel_meta[i]
         if name and price > 0:
-            fuels.append({"name": name, "usage": usage, "price": price})
+            fuels.append(
+                {"name": name, "usage": usage, "price": price, "coeff": c, "index": i}
+            )
     return fuels
 
 
-def _compute_breakdowns(product_df: pd.DataFrame) -> list[CostBreakdown]:
+def _compute_breakdowns(
+    product_df: pd.DataFrame, coeffs: ItemCoeffs
+) -> list[CostBreakdown]:
     """全改定行の原価内訳を計算。"""
-    breakdowns = []
+    breakdowns: list[CostBreakdown] = []
     for _, row in product_df.iterrows():
         components = _extract_components(row)
-        fuels = _extract_fuels(row)
+        fuels = _extract_fuels(row, coeffs)
         hourly_wage = _parse_float(str(row.get("労務費（時間当り）", "")))
-        fare_per_m = _parse_float(str(row.get("［運賃］円/m", "")))
-        transport_per_truck = fare_per_m * LOT_SIZE_M
+        # 運賃はオーバーライドがあればそれを優先、無ければ unified.csv の ［運賃］円/m を使用
+        if coeffs.transport_per_unit is not None:
+            fare_per_unit = coeffs.transport_per_unit
+        else:
+            fare_per_unit = _parse_float(str(row.get("［運賃］円/m", "")))
+        transport_per_truck = fare_per_unit * coeffs.lot_size
 
         breakdown = calc_total_cost(
             components=components,
             fuels=fuels,
             hourly_wage=hourly_wage,
-            packing_price=PACKING_UNIT_PRICE,
             transport_per_truck=transport_per_truck,
+            coeffs=coeffs,
         )
         breakdowns.append(breakdown)
     return breakdowns
 
 
-def _render_product_info(product_df: pd.DataFrame) -> None:
+def _render_product_info(product_df: pd.DataFrame, coeffs: ItemCoeffs) -> None:
     """品目基本情報セクション。"""
     st.markdown("---")
     st.subheader("品目情報")
@@ -140,19 +150,43 @@ def _render_product_info(product_df: pd.DataFrame) -> None:
     cols[0].metric("品名", str(latest.get("品名", "")))
     cols[1].metric("文書番号", str(latest.get("文書番号", "")))
     price = _parse_float(str(latest.get("改定後の価格", "")))
-    cols[2].metric("現行価格", f"{price:.2f} 円/m" if price else "—")
+    cols[2].metric("現行価格", f"{price:.2f} {coeffs.unit}" if price else "—")
     cols[3].metric("最終改定日", str(latest.get("改定時期", "")))
-    cols[4].metric("製品重量", f"{PRODUCT_WEIGHT_KG_PER_M} kg/m")
+    weight_unit = "kg/m" if coeffs.unit.endswith("/m") else "kg"
+    cols[4].metric("製品重量", f"{coeffs.product_weight_per_unit} {weight_unit}")
+
+
+def _render_market_chart(component_name: str) -> None:
+    """成分の市況推移チャートを描画。データが無ければ案内を出す。"""
+    df = load_market_prices(component_name)
+    if df.empty:
+        st.info(f"『{component_name}』の市況時系列データは未登録です（market_prices.csv に追加してください）。")
+        return
+    chart_df = df.set_index("year_month").rename(columns={"price_jpy_per_kg": "JPY/kg"})
+    st.line_chart(chart_df, height=240)
+    latest = df.iloc[-1]
+    st.caption(
+        f"最新: {latest['year_month'].strftime('%Y-%m')} 時点 {latest['price_jpy_per_kg']:.2f} 円/kg"
+        f"（{df['year_month'].min().strftime('%Y-%m')}〜{df['year_month'].max().strftime('%Y-%m')}）"
+    )
 
 
 def _render_cost_table(
-    product_df: pd.DataFrame, breakdowns: list[CostBreakdown]
+    product_df: pd.DataFrame,
+    breakdowns: list[CostBreakdown],
+    coeffs: ItemCoeffs,
 ) -> None:
-    """原価内訳テーブル（改定日ごとの時系列）。"""
+    """原価内訳セクション。費目ごとに expander で計算詳細を展開可能。"""
     st.markdown("---")
-    st.subheader("原価内訳（時系列比較）（円/m）")
-    st.caption("成分・燃動力・労務費・運賃から推定原価を積み上げ計算し、改定日ごとに比較した表です。当社購入価格との差から仕入先の利益率を推定できます。")
-    st.info("市況単価は日銀企業物価指数（CGPI）、労務費は厚労省最低賃金、運賃は国交省標準運賃に基づく推計値です。詳細は docs/market-data-sources.md を参照。")
+    st.subheader(f"原価内訳（時系列比較）（{coeffs.unit}）")
+    st.caption(
+        "成分・燃動力・労務費・運賃から推定原価を積み上げ計算し、改定日ごとに比較します。"
+        "各費目を展開すると「市況単価 × 推定使用量 × 係数 = 推定費用」の内訳を確認できます。"
+    )
+    st.info(
+        "市況単価は日銀企業物価指数（CGPI）、労務費は厚労省最低賃金、運賃は国交省標準運賃に基づく推計値です。"
+        "詳細は docs/market-data-sources.md を参照。"
+    )
 
     dates = product_df["改定時期"].tolist()
     purchase_prices = [
@@ -160,156 +194,177 @@ def _render_cost_table(
         for _, row in product_df.iterrows()
     ]
 
-    rows_data: list[dict] = []
-
-    # ① 材料費（成分別明細）
+    # --- ① 材料費 ---
+    st.markdown("### ① 材料費")
     for i in range(1, 5):
-        comp_names: set[str] = set()
-        for _, row in product_df.iterrows():
-            name = str(row.get(f"成分{i}", "")).strip()
-            if name:
-                comp_names.add(name)
+        comp_names = {
+            str(row.get(f"成分{i}", "")).strip()
+            for _, row in product_df.iterrows()
+            if str(row.get(f"成分{i}", "")).strip()
+        }
         if not comp_names:
             continue
-        comp_label = f"  成分{i}: {next(iter(comp_names))}"
-        row_dict: dict = {"費目": comp_label}
-        for j, (_, row) in enumerate(product_df.iterrows()):
-            ratio = _parse_ratio(str(row.get(f"成分{i}_含有量", "")))
-            price = _parse_float(str(row.get(f"［成分{i}］市況単価", "")))
-            if ratio > 0 and price > 0:
-                cost = PRODUCT_WEIGHT_KG_PER_M * ratio * price * MATERIAL_COEFF
-                row_dict[dates[j]] = f"{cost:.3f}"
-            else:
-                row_dict[dates[j]] = "—"
-        rows_data.append(row_dict)
+        comp_name = next(iter(comp_names))
+        # 成分別の係数（オーバーライドあり/無し）
+        coeff_val = coeffs.coeff_for_component(i)
+        with st.expander(f"成分{i}: {comp_name}（係数 {coeff_val}）", expanded=False):
+            tab_calc, tab_market = st.tabs(["計算内訳", "市況推移"])
+            with tab_calc:
+                rows = []
+                for j, (_, row) in enumerate(product_df.iterrows()):
+                    ratio = _parse_ratio(str(row.get(f"成分{i}_含有量", "")))
+                    price = _parse_float(str(row.get(f"［成分{i}］市況単価", "")))
+                    if ratio > 0 and price > 0:
+                        cost = (
+                            coeffs.product_weight_per_unit * ratio * price * coeff_val
+                        )
+                        rows.append(
+                            {
+                                "改定日": dates[j],
+                                "製品重量": coeffs.product_weight_per_unit,
+                                "成分割合": f"{ratio*100:.1f}%",
+                                "市況単価(円/kg)": price,
+                                "係数": coeff_val,
+                                f"推定費用({coeffs.unit})": round(cost, 4),
+                            }
+                        )
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                else:
+                    st.caption("有効なデータがありません。")
+            with tab_market:
+                _render_market_chart(comp_name)
 
-    material_row: dict = {"費目": "① 材料費 小計"}
-    for j, bd in enumerate(breakdowns):
-        material_row[dates[j]] = f"{bd.material:.3f}"
-    rows_data.append(material_row)
+    # 材料費 小計表
+    material_summary = pd.DataFrame(
+        [{"改定日": dates[j], f"材料費 小計({coeffs.unit})": round(bd.material, 3)} for j, bd in enumerate(breakdowns)]
+    )
+    st.markdown("**材料費 小計**")
+    st.dataframe(material_summary, hide_index=True, use_container_width=True)
 
-    # ② 燃動力費
-    for i in range(1, 3):
-        fuel_names: set[str] = set()
-        for _, row in product_df.iterrows():
-            name = str(row.get(f"燃動力{i}", "")).strip()
-            if name:
-                fuel_names.add(name)
+    # --- ② 燃動力費 ---
+    st.markdown("### ② 燃動力費")
+    fuel_meta = {1: ("LNG", coeffs.lng_usage, coeffs.lng_coeff),
+                 2: ("電力", coeffs.elec_usage, coeffs.elec_coeff)}
+    for i in (1, 2):
+        fuel_names = {
+            str(row.get(f"燃動力{i}", "")).strip()
+            for _, row in product_df.iterrows()
+            if str(row.get(f"燃動力{i}", "")).strip()
+        }
         if not fuel_names:
             continue
-        fuel_label = f"  燃動力{i}: {next(iter(fuel_names))}"
-        row_dict = {"費目": fuel_label}
-        usage = [FUEL_USAGE_LNG_L_PER_M, FUEL_USAGE_ELEC_KWH_PER_M][i - 1]
-        for j, (_, row) in enumerate(product_df.iterrows()):
-            price = _parse_float(str(row.get(f"［燃動力{i}］単価", "")))
-            if price > 0:
-                cost = usage * price * FUEL_COEFF
-                row_dict[dates[j]] = f"{cost:.3f}"
+        fuel_label, usage, c = fuel_meta[i]
+        display_name = next(iter(fuel_names))
+        with st.expander(f"燃動力{i}: {display_name}（使用量 {usage}, 係数 {c}）", expanded=False):
+            rows = []
+            for j, (_, row) in enumerate(product_df.iterrows()):
+                price = _parse_float(str(row.get(f"［燃動力{i}］単価", "")))
+                if price > 0:
+                    cost = usage * price * c
+                    rows.append(
+                        {
+                            "改定日": dates[j],
+                            "使用量": usage,
+                            "単価": price,
+                            "係数": c,
+                            f"推定費用({coeffs.unit})": round(cost, 4),
+                        }
+                    )
+            if rows:
+                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
             else:
-                row_dict[dates[j]] = "—"
-        rows_data.append(row_dict)
+                st.caption("有効なデータがありません。")
 
-    fuel_row: dict = {"費目": "② 燃動力費 小計"}
+    fuel_summary = pd.DataFrame(
+        [{"改定日": dates[j], f"燃動力費 小計({coeffs.unit})": round(bd.fuel, 3)} for j, bd in enumerate(breakdowns)]
+    )
+    st.markdown("**燃動力費 小計**")
+    st.dataframe(fuel_summary, hide_index=True, use_container_width=True)
+
+    # --- ③ 労務費 ---
+    st.markdown("### ③ 労務費")
+    with st.expander(
+        f"労務費（生産時間 {coeffs.production_time_h_per_unit} h, 係数 {coeffs.labor_coeff}）",
+        expanded=False,
+    ):
+        rows = []
+        for j, (_, row) in enumerate(product_df.iterrows()):
+            wage = _parse_float(str(row.get("労務費（時間当り）", "")))
+            cost = coeffs.production_time_h_per_unit * wage * coeffs.labor_coeff
+            rows.append(
+                {
+                    "改定日": dates[j],
+                    "生産時間(h)": coeffs.production_time_h_per_unit,
+                    "時間単価(円/h)": wage,
+                    "係数": coeffs.labor_coeff,
+                    f"推定費用({coeffs.unit})": round(cost, 4),
+                }
+            )
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    # --- ④ 梱包費 ---
+    st.markdown("### ④ 梱包費")
+    with st.expander(
+        f"梱包費（単価 {coeffs.packing_unit_price} 円 × ロット {coeffs.packing_lot} ÷ LOT {coeffs.lot_size}）",
+        expanded=False,
+    ):
+        cost = (
+            coeffs.packing_unit_price * coeffs.packing_lot / coeffs.lot_size
+            if coeffs.lot_size
+            else 0
+        )
+        st.caption(f"全改定共通: **{cost:.4f} {coeffs.unit}**")
+
+    # --- ⑤ 運賃 ---
+    st.markdown("### ⑤ 運賃")
+    transport_source = "item_overrides.csv" if coeffs.transport_per_unit is not None else "unified.csv ［運賃］円/m"
+    with st.expander(
+        f"運賃（距離 {coeffs.transport_distance_km} km, LOT {coeffs.lot_size}, 出典: {transport_source}）",
+        expanded=False,
+    ):
+        rows = []
+        for j, (_, row) in enumerate(product_df.iterrows()):
+            if coeffs.transport_per_unit is not None:
+                fare_per_unit = coeffs.transport_per_unit
+            else:
+                fare_per_unit = _parse_float(str(row.get("［運賃］円/m", "")))
+            rows.append(
+                {
+                    "改定日": dates[j],
+                    f"運賃({coeffs.unit})": round(fare_per_unit, 4),
+                    "LOT": coeffs.lot_size,
+                    f"推定費用({coeffs.unit})": round(breakdowns[j].transport, 4),
+                }
+            )
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    # --- サマリ表 ---
+    st.markdown("### サマリ")
+    summary_rows = []
     for j, bd in enumerate(breakdowns):
-        fuel_row[dates[j]] = f"{bd.fuel:.3f}"
-    rows_data.append(fuel_row)
-
-    labor_row: dict = {"費目": "③ 労務費"}
-    for j, bd in enumerate(breakdowns):
-        labor_row[dates[j]] = f"{bd.labor:.3f}"
-    rows_data.append(labor_row)
-
-    packing_row: dict = {"費目": "④ その他（梱包費）"}
-    for j, bd in enumerate(breakdowns):
-        packing_row[dates[j]] = f"{bd.packing:.3f}"
-    rows_data.append(packing_row)
-
-    transport_row: dict = {"費目": "⑤ 運賃"}
-    for j, bd in enumerate(breakdowns):
-        transport_row[dates[j]] = f"{bd.transport:.4f}"
-    rows_data.append(transport_row)
-
-    total_row: dict = {"費目": "推定原価"}
-    for j, bd in enumerate(breakdowns):
-        total_row[dates[j]] = f"{bd.total:.2f}"
-    rows_data.append(total_row)
-
-    purchase_row: dict = {"費目": "当社購入価格"}
-    for j, price in enumerate(purchase_prices):
-        purchase_row[dates[j]] = f"{price:.2f}" if price else "—"
-    rows_data.append(purchase_row)
-
-    rate_row: dict = {"費目": "製造原価率"}
-    for j, (bd, price) in enumerate(zip(breakdowns, purchase_prices)):
-        if price > 0:
-            rate = bd.total / price * 100
-            rate_row[dates[j]] = f"{rate:.0f}%"
-        else:
-            rate_row[dates[j]] = "—"
-    rows_data.append(rate_row)
-
-    table_df = pd.DataFrame(rows_data).set_index("費目")
-
-    # 成分ごとに一次情報URLが存在するか判定
-    component_has_url: dict[int, bool] = {}
-    for i in range(1, 5):
-        has_url = False
-        for _, row in product_df.iterrows():
-            url = str(row.get(f"［成分{i}］市況情報", "")).strip()
-            if url.startswith("http"):
-                has_url = True
-                break
-        component_has_url[i] = has_url
-
-    # 純ダミー: 梱包費のみ（一次情報なし）
-    dummy_rows = {"④ その他（梱包費）"}
-    # 掛け合わせ/集計行
-    mixed_rows = {"① 材料費 小計", "② 燃動力費 小計", "推定原価", "製造原価率"}
-    # 太字にする行
-    bold_rows = {"① 材料費 小計", "② 燃動力費 小計", "推定原価", "当社購入価格", "製造原価率"}
-
-    def _row_style(name: str) -> str:
-        styles: list[str] = []
-        if name in dummy_rows:
-            styles.append("color: #e74c3c")
-        elif name in mixed_rows:
-            styles.append("color: #f0ad4e")
-        elif name.startswith("  成分"):
-            # 個別成分行: URLがなければオレンジ、あれば白（デフォルト）
-            try:
-                idx = int(name.strip().split(":")[0].replace("成分", ""))
-                if not component_has_url.get(idx, False):
-                    styles.append("color: #f0ad4e")
-            except ValueError:
-                pass
-        if name in bold_rows:
-            styles.append("font-weight: bold")
-        if name == "当社購入価格":
-            styles.append("border-top: 2px solid #666")
-        return "; ".join(styles)
-
-    st.caption("⚪ 白文字 = 一次情報あり（成分別URL）　🟠 オレンジ文字 = 掛け合わせ/集計値　🔴 赤文字 = 梱包費")
-    st.caption("※ 製品重量 0.08 kg/m・生産時間 4 h/m・労務/材料/燃動力係数・梱包ロット等は、クライアント提示の『やりたい事のイメージメモ（WK-680RIP 基準）』の係数に則った数字を全品目共通で使用しています。")
-
-    html = '<table style="width:100%; border-collapse:collapse; font-size:14px;">'
-    html += "<thead><tr><th style='text-align:left; padding:6px; border-bottom:2px solid #ccc;'>費目</th>"
-    for col in table_df.columns:
-        html += f"<th style='text-align:right; padding:6px; border-bottom:2px solid #ccc;'>{col}</th>"
-    html += "</tr></thead><tbody>"
-    for idx, row in table_df.iterrows():
-        style = _row_style(str(idx))
-        html += f"<tr style='{style}'>"
-        html += f"<td style='padding:6px; border-bottom:1px solid #eee;'>{idx}</td>"
-        for val in row:
-            html += f"<td style='text-align:right; padding:6px; border-bottom:1px solid #eee;'>{val}</td>"
-        html += "</tr>"
-    html += "</tbody></table>"
-
-    st.markdown(html, unsafe_allow_html=True)
+        purchase = purchase_prices[j]
+        rate = (bd.total / purchase * 100) if purchase > 0 else None
+        summary_rows.append(
+            {
+                "改定日": dates[j],
+                f"材料費({coeffs.unit})": round(bd.material, 3),
+                f"燃動力費({coeffs.unit})": round(bd.fuel, 3),
+                f"労務費({coeffs.unit})": round(bd.labor, 3),
+                f"梱包費({coeffs.unit})": round(bd.packing, 3),
+                f"運賃({coeffs.unit})": round(bd.transport, 4),
+                f"推定原価({coeffs.unit})": round(bd.total, 2),
+                f"当社購入価格({coeffs.unit})": round(purchase, 2) if purchase else None,
+                "製造原価率(%)": round(rate, 1) if rate is not None else None,
+            }
+        )
+    st.dataframe(pd.DataFrame(summary_rows), hide_index=True, use_container_width=True)
 
 
 def _render_chart(
-    product_df: pd.DataFrame, breakdowns: list[CostBreakdown]
+    product_df: pd.DataFrame,
+    breakdowns: list[CostBreakdown],
+    coeffs: ItemCoeffs,
 ) -> None:
     """推定原価 vs 当社購入価格の折れ線チャート。"""
     st.markdown("---")
@@ -325,29 +380,30 @@ def _render_chart(
     chart_df = pd.DataFrame(
         {
             "改定日": dates,
-            "推定原価（円/m）": [bd.total for bd in breakdowns],
-            "当社購入価格（円/m）": purchase_prices,
+            f"推定原価（{coeffs.unit}）": [bd.total for bd in breakdowns],
+            f"当社購入価格（{coeffs.unit}）": purchase_prices,
         }
     ).set_index("改定日")
 
     st.line_chart(chart_df)
 
 
-def _render_revision_history(product_df: pd.DataFrame) -> None:
+def _render_revision_history(product_df: pd.DataFrame, coeffs: ItemCoeffs) -> None:
     """改定履歴テーブル。"""
     st.markdown("---")
     st.subheader("改定履歴")
     st.caption("過去の価格改定の記録です。改定日・改定前後の価格・仕入先が申告した改定理由を一覧で確認できます。")
-    st.caption("品質仕様書・単価改定履歴・価格交渉記録から抽出したデータです。")
 
     history = product_df[["改定時期", "元価格", "改定後の価格", "改定理由"]].copy()
-    history.columns = ["改定日", "改定前（円/m）", "改定後（円/m）", "改定理由"]
+    history.columns = ["改定日", f"改定前（{coeffs.unit}）", f"改定後（{coeffs.unit}）", "改定理由"]
     history = history.reset_index(drop=True)
     st.dataframe(history, use_container_width=True, hide_index=True)
 
 
 def _build_proposal_text(
-    product_df: pd.DataFrame, breakdowns: list[CostBreakdown]
+    product_df: pd.DataFrame,
+    breakdowns: list[CostBreakdown],
+    coeffs: ItemCoeffs,
 ) -> str:
     """シミュレーション結果から交渉用提案文を生成（デモ）。"""
     latest = product_df.iloc[-1]
@@ -357,15 +413,13 @@ def _build_proposal_text(
     revision_date = str(latest.get("改定時期", ""))
     current_price = _parse_float(str(latest.get("改定後の価格", "")))
     reason = str(latest.get("改定理由", ""))
+    unit = coeffs.unit
 
     cost_rate = (bd.total / current_price * 100) if current_price > 0 else 0
 
-    # 前回改定との差分
     if len(breakdowns) >= 2:
         prev_bd = breakdowns[-2]
-        prev_price = _parse_float(
-            str(product_df.iloc[-2].get("改定後の価格", ""))
-        )
+        prev_price = _parse_float(str(product_df.iloc[-2].get("改定後の価格", "")))
         price_change = current_price - prev_price
         cost_change = bd.total - prev_bd.total
     else:
@@ -383,11 +437,11 @@ def _build_proposal_text(
         "",
         "## 1. 現状の分析",
         "",
-        f"当社シミュレーションによる推定製造原価は **{bd.total:.2f} 円/m** です。"
-        f"現行の当社購入価格 **{current_price:.2f} 円/m** に対し、"
+        f"当社シミュレーションによる推定製造原価は **{bd.total:.2f} {unit}** です。"
+        f"現行の当社購入価格 **{current_price:.2f} {unit}** に対し、"
         f"製造原価率は **{cost_rate:.0f}%** と試算されます。",
         "",
-        "| 費目 | 金額（円/m） |",
+        f"| 費目 | 金額（{unit}） |",
         "|------|------------|",
         f"| 材料費 | {bd.material:.3f} |",
         f"| 燃動力費 | {bd.fuel:.3f} |",
@@ -411,12 +465,11 @@ def _build_proposal_text(
         lines += [
             "## 3. 前回改定との比較",
             "",
-            f"- 購入価格変動: {price_change:+.2f} 円/m（{direction}）",
-            f"- 推定原価変動: {cost_change:+.2f} 円/m",
+            f"- 購入価格変動: {price_change:+.2f} {unit}（{direction}）",
+            f"- 推定原価変動: {cost_change:+.2f} {unit}",
             "",
         ]
 
-    # 交渉方針（デモ用固定ロジック）
     lines += [
         "## 4. 交渉方針（案）",
         "",
@@ -442,8 +495,7 @@ def _build_proposal_text(
     else:
         lines += [
             "推定原価率が85%を超えており、仕入先の利益圧迫が推測されます。",
-            "**一定の値上げ受け入れはやむを得ない**と判断されますが、"
-            "段階的な価格改定を提案します。",
+            "**一定の値上げ受け入れはやむを得ない**と判断されますが、段階的な価格改定を提案します。",
             "",
             "### 提案アクション",
             "- 値上げ幅を2回に分割し、半年ごとの段階改定を提案",
@@ -470,21 +522,18 @@ def _render_source_links(product_df: pd.DataFrame) -> None:
 
     links: list[tuple[str, str]] = []
 
-    # 成分ごとの市況情報URL
     for i in range(1, 5):
         comp_name = str(latest.get(f"成分{i}", "")).strip()
         url = str(latest.get(f"［成分{i}］市況情報", "")).strip()
         if comp_name and url and url.startswith("http"):
             links.append((f"成分{i}（{comp_name}）市況単価", url))
 
-    # 燃動力ごとの市況情報URL
     for i in range(1, 5):
         fuel_name = str(latest.get(f"燃動力{i}", "")).strip()
         url = str(latest.get(f"［燃動力{i}］市況情報", "")).strip()
         if fuel_name and url and url.startswith("http"):
             links.append((f"燃動力{i}（{fuel_name}）単価", url))
 
-    # 労務費
     url = str(latest.get("［労務費］市況情報", "")).strip()
     if url and url.startswith("http"):
         links.append(("労務費", url))
@@ -499,7 +548,9 @@ def _render_source_links(product_df: pd.DataFrame) -> None:
 
 
 def _render_proposal_section(
-    product_df: pd.DataFrame, breakdowns: list[CostBreakdown]
+    product_df: pd.DataFrame,
+    breakdowns: list[CostBreakdown],
+    coeffs: ItemCoeffs,
 ) -> None:
     """提案文作成セクション。"""
     st.markdown("---")
@@ -509,7 +560,7 @@ def _render_proposal_section(
 
     if st.button("提案文を作成", type="primary", use_container_width=True):
         with st.spinner("提案文を生成中..."):
-            proposal = _build_proposal_text(product_df, breakdowns)
+            proposal = _build_proposal_text(product_df, breakdowns, coeffs)
         st.session_state["proposal_text"] = proposal
 
     if "proposal_text" in st.session_state:

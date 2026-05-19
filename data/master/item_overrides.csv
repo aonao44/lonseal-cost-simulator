@@ -1,0 +1,4 @@
+文書番号,品名,unit,product_weight_kg_per_unit,production_time_h_per_unit,labor_coeff,lng_usage,lng_coeff,elec_usage,elec_coeff,packing_unit_price,packing_lot,lot_size,transport_distance_km,transport_per_unit,material_coeff_default,material_coeff_1,material_coeff_2,material_coeff_3,material_coeff_4
+1203010160,WK-680RIP(965),円/m,0.08,4,0.00045,0.5,0.03,0.5,0.03,135,300,128000,207,0.416,0.4,,,,
+1202010360,ガラスクレネット GW33126,円/m,0.034,4,0.004851,0.5,0.03,0.5,0.03,135,30,26000,600,3.631,10,,,,
+0401010170,アデカスタブ AC-288,円/kg,1,4,0.025,0.5,0.2,0.5,1.5,0,1,2000,460,52.5,0.3,0.3,20,0.3,0.3

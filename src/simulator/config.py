@@ -7,8 +7,10 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT_DIR / "data"
 UNIFIED_CSV_PATH = DATA_DIR / "master" / "unified.csv"
+ITEM_OVERRIDES_CSV_PATH = DATA_DIR / "master" / "item_overrides.csv"
+MARKET_PRICES_CSV_PATH = DATA_DIR / "master" / "market_prices.csv"
 
-# --- 原価計算の固定係数 ---
+# --- 原価計算のデフォルト係数（item_overrides.csv で品目別に上書き可能） ---
 MATERIAL_COEFF = 0.4
 FUEL_COEFF = 0.03
 LABOR_COEFF = 0.00045
