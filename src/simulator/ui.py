@@ -599,7 +599,6 @@ def _build_source_citation_lines(latest: pd.Series) -> list[str]:
         "  [https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/koyou_roudou/roudoukijun/minimumichiran/index.html](https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/koyou_roudou/roudoukijun/minimumichiran/index.html)",
         "- **運賃**: 国土交通省 標準的な運賃（令和6年3月告示、大型車10t）",
         "  [https://www.mlit.go.jp/jidosha/jidosha_tk4_000118.html](https://www.mlit.go.jp/jidosha/jidosha_tk4_000118.html)",
-        "- **算出方法・係数の詳細**: 社内ドキュメント `docs/market-data-sources.md` を参照",
         "",
     ]
 
@@ -620,7 +619,7 @@ def _build_source_citation_lines(latest: pd.Series) -> list[str]:
         item_links.append(("労務費", labor_url))
 
     if item_links:
-        lines += ["### 当該品目の一次ソース（unified.csv 登録分）", ""]
+        lines += ["### 当該品目の一次ソース", ""]
         for label, url in item_links:
             lines.append(f"- {label}: [{url}]({url})")
         lines.append("")
