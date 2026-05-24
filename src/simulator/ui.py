@@ -218,6 +218,7 @@ def _render_cost_table(
     )
     st.info(
         "市況単価は日銀企業物価指数（CGPI）、労務費は厚労省最低賃金、運賃は国交省標準運賃に基づく推計値です。"
+        " 詳細は[こちら](https://axiomatic-eoraptor-b67.notion.site/v2-36a57afb2a398149b8c4e899708f2b98)を参照。"
     )
 
     dates = product_df["改定時期"].tolist()
