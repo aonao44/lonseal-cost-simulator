@@ -1,6 +1,9 @@
 """原価シミュレーター Streamlit UI。"""
 from __future__ import annotations
 
+from html import escape as html_escape
+
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -146,14 +149,24 @@ def _render_product_info(product_df: pd.DataFrame, coeffs: ItemCoeffs) -> None:
     st.subheader("品目情報")
     st.caption("選択した品目の基本情報です。品質仕様書・単価改定履歴から抽出しています。")
     latest = product_df.iloc[-1]
-    cols = st.columns(5)
-    cols[0].metric("品名", str(latest.get("品名", "")))
-    cols[1].metric("文書番号", str(latest.get("文書番号", "")))
     price = _parse_float(str(latest.get("改定後の価格", "")))
-    cols[2].metric("現行価格", f"{price:.2f} {coeffs.unit}" if price else "—")
-    cols[3].metric("最終改定日", str(latest.get("改定時期", "")))
     weight_unit = "kg/m" if coeffs.unit.endswith("/m") else "kg"
-    cols[4].metric("製品重量", f"{coeffs.product_weight_per_unit} {weight_unit}")
+
+    # 品名は metric だと長い文字列で切れるため markdown で全幅表示
+    # unified.csv 由来の外部入力なので XSS 対策として html.escape を必ず通す
+    product_name = str(latest.get("品名", ""))
+    st.markdown(
+        f"<div style='font-size:0.85rem;color:#7a8290;margin-bottom:0.1rem;'>品名</div>"
+        f"<div style='font-size:1.35rem;font-weight:600;line-height:1.35;"
+        f"word-break:break-word;margin-bottom:0.5rem;'>{html_escape(product_name)}</div>",
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(4)
+    cols[0].metric("文書番号", str(latest.get("文書番号", "")))
+    cols[1].metric("現行価格", f"{price:.2f} {coeffs.unit}" if price else "—")
+    cols[2].metric("最終改定日", str(latest.get("改定時期", "")))
+    cols[3].metric("製品重量", f"{coeffs.product_weight_per_unit} {weight_unit}")
 
 
 def _render_market_chart(component_name: str) -> None:
@@ -162,8 +175,28 @@ def _render_market_chart(component_name: str) -> None:
     if df.empty:
         st.info(f"『{component_name}』の市況時系列データは未登録です（market_prices.csv に追加してください）。")
         return
-    chart_df = df.set_index("year_month").rename(columns={"price_jpy_per_kg": "JPY/kg"})
-    st.line_chart(chart_df, height=240)
+    chart_df = df[["year_month", "price_jpy_per_kg"]].rename(
+        columns={"year_month": "年月", "price_jpy_per_kg": "JPY/kg"}
+    )
+    chart = (
+        alt.Chart(chart_df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("年月:T", axis=alt.Axis(title="年月", format="%Y-%m")),
+            y=alt.Y(
+                "JPY/kg:Q",
+                axis=alt.Axis(title="JPY/kg"),
+                scale=alt.Scale(zero=False, reverse=False),
+                sort="ascending",
+            ),
+            tooltip=[
+                alt.Tooltip("年月:T", format="%Y-%m"),
+                alt.Tooltip("JPY/kg:Q", format=".2f"),
+            ],
+        )
+        .properties(height=240)
+    )
+    st.altair_chart(chart, use_container_width=True)
     latest = df.iloc[-1]
     st.caption(
         f"最新: {latest['year_month'].strftime('%Y-%m')} 時点 {latest['price_jpy_per_kg']:.2f} 円/kg"
@@ -377,15 +410,40 @@ def _render_chart(
         for _, row in product_df.iterrows()
     ]
 
+    estimate_col = f"推定原価（{coeffs.unit}）"
+    purchase_col = f"当社購入価格（{coeffs.unit}）"
     chart_df = pd.DataFrame(
         {
             "改定日": dates,
-            f"推定原価（{coeffs.unit}）": [bd.total for bd in breakdowns],
-            f"当社購入価格（{coeffs.unit}）": purchase_prices,
+            estimate_col: [bd.total for bd in breakdowns],
+            purchase_col: purchase_prices,
         }
-    ).set_index("改定日")
-
-    st.line_chart(chart_df)
+    )
+    long_df = chart_df.melt(
+        id_vars=["改定日"], value_vars=[estimate_col, purchase_col],
+        var_name="系列", value_name="金額",
+    )
+    chart = (
+        alt.Chart(long_df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("改定日:T", axis=alt.Axis(title="改定日", format="%Y-%m")),
+            y=alt.Y(
+                "金額:Q",
+                axis=alt.Axis(title=f"金額（{coeffs.unit}）"),
+                scale=alt.Scale(zero=False, reverse=False),
+                sort="ascending",
+            ),
+            color=alt.Color("系列:N", legend=alt.Legend(title=None, orient="top")),
+            tooltip=[
+                alt.Tooltip("改定日:T", format="%Y-%m-%d"),
+                alt.Tooltip("系列:N"),
+                alt.Tooltip("金額:Q", format=".2f"),
+            ],
+        )
+        .properties(height=320)
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 def _render_revision_history(product_df: pd.DataFrame, coeffs: ItemCoeffs) -> None:
@@ -404,8 +462,13 @@ def _build_proposal_text(
     product_df: pd.DataFrame,
     breakdowns: list[CostBreakdown],
     coeffs: ItemCoeffs,
+    *,
+    internal: bool = False,
 ) -> str:
-    """シミュレーション結果から交渉用提案文を生成（デモ）。"""
+    """シミュレーション結果から交渉用提案文を生成（デモ）。
+
+    internal=True のとき、社内確認用として計算根拠の出典（公式統計URL等）を末尾に付与する。
+    """
     latest = product_df.iloc[-1]
     bd = breakdowns[-1]
     product_name = str(latest.get("品名", ""))
@@ -426,8 +489,9 @@ def _build_proposal_text(
         price_change = 0.0
         cost_change = 0.0
 
+    title_suffix = "（社内確認用）" if internal else ""
     lines = [
-        f"# {product_name} — 価格改定に関するご提案",
+        f"# {product_name} — 価格改定に関するご提案{title_suffix}",
         "",
         f"**対象品目:** {product_name}",
         f"**仕入先:** {supplier}",
@@ -502,6 +566,10 @@ def _build_proposal_text(
             "- 長期契約（1年以上）を条件に値上げ幅の圧縮を交渉",
         ]
 
+    if internal:
+        lines += ["", "## 5. 計算根拠の出典（社内確認用）", ""]
+        lines += _build_source_citation_lines(latest)
+
     lines += [
         "",
         "---",
@@ -510,6 +578,54 @@ def _build_proposal_text(
         "実際の交渉にあたっては、最新の市況データおよび社内方針をご確認ください。*",
     ]
     return "\n".join(lines)
+
+
+def _build_source_citation_lines(latest: pd.Series) -> list[str]:
+    """社内確認用に、計算根拠（公式統計）の出典リストを返す。
+
+    1) 共通の公式統計（市況・労務費・運賃の算出根拠）
+    2) 当該品目の unified.csv に登録された一次ソースURL
+    """
+    lines = [
+        "本提案の推定原価は、以下の公的統計を基準にシミュレーションしています。",
+        "",
+        "### 共通の算出根拠",
+        "",
+        "- **材料費（成分市況単価）**: 日銀 企業物価指数（CGPI）／PPI類別 月報",
+        "  [https://www.boj.or.jp/statistics/pi/cgpi_release/index.htm/](https://www.boj.or.jp/statistics/pi/cgpi_release/index.htm/)",
+        "- **燃動力費（LNG・電力）**: 日銀 CGPI「石油・石炭」「電力・ガス・水道」類別指数",
+        "  [https://www.boj.or.jp/statistics/pi/cgpi_release/index.htm/](https://www.boj.or.jp/statistics/pi/cgpi_release/index.htm/)",
+        "- **労務費**: 厚生労働省 地域別最低賃金（全国加重平均）",
+        "  [https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/koyou_roudou/roudoukijun/minimumichiran/index.html](https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/koyou_roudou/roudoukijun/minimumichiran/index.html)",
+        "- **運賃**: 国土交通省 標準的な運賃（令和6年3月告示、大型車10t）",
+        "  [https://www.mlit.go.jp/jidosha/jidosha_tk4_000118.html](https://www.mlit.go.jp/jidosha/jidosha_tk4_000118.html)",
+        "- **算出方法・係数の詳細**: 社内ドキュメント `docs/market-data-sources.md` を参照",
+        "",
+    ]
+
+    # 当該品目に紐付く一次ソースURL（unified.csv 由来）
+    item_links: list[tuple[str, str]] = []
+    for i in range(1, 5):
+        comp_name = str(latest.get(f"成分{i}", "")).strip()
+        url = str(latest.get(f"［成分{i}］市況情報", "")).strip()
+        if comp_name and url and url.startswith("http"):
+            item_links.append((f"成分{i}（{comp_name}）市況単価", url))
+    for i in range(1, 5):
+        fuel_name = str(latest.get(f"燃動力{i}", "")).strip()
+        url = str(latest.get(f"［燃動力{i}］市況情報", "")).strip()
+        if fuel_name and url and url.startswith("http"):
+            item_links.append((f"燃動力{i}（{fuel_name}）単価", url))
+    labor_url = str(latest.get("［労務費］市況情報", "")).strip()
+    if labor_url and labor_url.startswith("http"):
+        item_links.append(("労務費", labor_url))
+
+    if item_links:
+        lines += ["### 当該品目の一次ソース（unified.csv 登録分）", ""]
+        for label, url in item_links:
+            lines.append(f"- {label}: [{url}]({url})")
+        lines.append("")
+
+    return lines
 
 
 def _render_source_links(product_df: pd.DataFrame) -> None:
@@ -558,16 +674,38 @@ def _render_proposal_section(
     st.caption("シミュレーション結果に基づき、仕入先への価格交渉用の提案文を自動生成します。製造原価率に応じた交渉方針の案を含みます。")
     st.info("提案文は日銀CGPI・厚労省最低賃金・国交省標準運賃ベースのシミュレーション結果に基づきます。")
 
+    mode = st.radio(
+        "提案文の用途",
+        options=["顧客向け", "社内確認用"],
+        index=0,
+        horizontal=True,
+        help="『社内確認用』では計算根拠（公式統計の出典URL）を本文末尾に付与します。",
+        key="proposal_mode",
+    )
+    internal = mode == "社内確認用"
+
     if st.button("提案文を作成", type="primary", use_container_width=True):
         with st.spinner("提案文を生成中..."):
-            proposal = _build_proposal_text(product_df, breakdowns, coeffs)
+            proposal = _build_proposal_text(
+                product_df, breakdowns, coeffs, internal=internal
+            )
         st.session_state["proposal_text"] = proposal
+        st.session_state["proposal_internal"] = internal
 
     if "proposal_text" in st.session_state:
-        st.markdown(st.session_state["proposal_text"])
-        st.download_button(
-            label="提案文をダウンロード（Markdown）",
-            data=st.session_state["proposal_text"],
-            file_name="proposal.md",
-            mime="text/markdown",
-        )
+        saved_internal = st.session_state.get("proposal_internal", False)
+        if saved_internal != internal:
+            saved_label = "社内確認用" if saved_internal else "顧客向け"
+            st.warning(
+                f"現在表示中の提案文は『{saved_label}』モードで生成されたものです。"
+                f"用途を変更したので、再度『提案文を作成』を押してください。"
+            )
+        else:
+            st.markdown(st.session_state["proposal_text"])
+            file_suffix = "_internal" if saved_internal else ""
+            st.download_button(
+                label="提案文をダウンロード（Markdown）",
+                data=st.session_state["proposal_text"],
+                file_name=f"proposal{file_suffix}.md",
+                mime="text/markdown",
+            )
